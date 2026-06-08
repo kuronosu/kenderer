@@ -3,7 +3,9 @@
 A 3D **software** rendering pipeline in pure Go — no GPU, no third-party
 dependencies in the core. It rasterizes triangles on the CPU through all the
 classic stages and ships a demo that renders a rotating, flat-shaded cube to an
-animated GIF.
+animated GIF. An optional, build-tag-gated viewer (`-tags sdl`) adds a real-time
+SDL3 window with an orbit camera; the default build and the GIF path stay
+zero-dependency.
 
 ## Quick start
 
@@ -17,6 +19,32 @@ go test ./...
 
 Flags: `-w`, `-h` (size), `-fps`, `-dur` (duration / one full turn), `-fov`
 (vertical FOV, degrees), `-out` (GIF path).
+
+## Interactive viewer (optional, SDL3)
+
+A real-time, resizable window with an orbit camera. It lives behind the `sdl`
+build tag, so it is the **only** part that pulls a third-party dependency
+(`github.com/Zyko0/go-sdl3`, a cgo-free purego binding); the default build and
+the GIF exporter above stay zero-dependency.
+
+```sh
+# Build/run the viewer (the sdl tag is required)
+go run -tags sdl ./cmd/viewer -w 800 -h 600 -fps 60 -fov 50
+```
+
+Controls: **drag** to orbit, **scroll** to zoom, **middle-drag** (or
+**shift+drag**) to pan, **Escape** or the close button to quit. The framebuffer
+tracks the window's pixel size, so resizing stays crisp and undistorted (HiDPI
+included).
+
+SDL3 itself does **not** need to be installed:
+
+- **Embedded (recommended):** the viewer imports
+  `github.com/Zyko0/go-sdl3/bin/binsdl`, which writes the bundled SDL3 library at
+  runtime — `defer binsdl.Load().Unload()`.
+- **From a path:** load a system/local SDL3 instead with
+  `sdl.LoadLibrary(sdl.Path())` (needs `SDL3.dll` / `libSDL3.so` / `.dylib`
+  reachable).
 
 ## Pipeline stages
 
@@ -44,12 +72,18 @@ Flags: `-w`, `-h` (size), `-fps`, `-dur` (duration / one full turn), `-fov`
 | `shading`     | `Shader` interface, Lambert, perspective-correct combine, sRGB |
 | `raster`      | triangle rasterization, coverage, depth test                |
 | `scene`       | `Camera`, `Transform`, `Object`, `Scene`                    |
-| `pipeline`    | stage orchestration + frustum clipping                      |
+| `pipeline`    | stage orchestration + frustum clipping (+ `Resize`)         |
 | `present`     | `Presenter` interface + stdlib animated-GIF backend         |
-| `cmd/cube`    | demo entry point                                            |
+| `input`       | backend-agnostic real-time input state (no SDL)             |
+| `camera`      | `OrbitCamera` (drag/zoom/pan) writing a `scene.Camera`      |
+| `cmd/cube`    | GIF demo entry point                                        |
+| `platform`    | SDL3 window + frame loop — build tag `sdl`                  |
+| `cmd/viewer`  | interactive viewer entry point — build tag `sdl`            |
 
-Dependencies form a DAG with `math3d` at the bottom and `cmd/cube` at the top;
-nothing in the core imports a presentation backend.
+Dependencies form a DAG with `math3d` at the bottom. The `sdl`-tagged packages
+(`platform`, `cmd/viewer`) are the only ones with a third-party dependency and
+are excluded from the default build; nothing in the core imports SDL or a
+presentation backend.
 
 ## Conventions (the non-obvious decisions)
 

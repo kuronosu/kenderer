@@ -44,6 +44,15 @@ func NewRenderer(opts Options) *Renderer {
 	}
 }
 
+// Resize reallocates the framebuffer to w x h pixels and recomputes the viewport.
+// The projection follows automatically: Render derives the aspect ratio from the
+// current size on every call. Width and Height must be positive.
+func (r *Renderer) Resize(w, h int) {
+	r.opts.Width, r.opts.Height = w, h
+	r.fb = framebuffer.New(w, h)
+	r.viewport = math3d.Viewport(0, 0, float64(w), float64(h))
+}
+
 // Render draws the scene into the Renderer's framebuffer and returns it.
 //
 // The returned *framebuffer.Buffer (and the image from its Image method) is
