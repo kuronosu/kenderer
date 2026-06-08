@@ -16,6 +16,10 @@
 //   - Normals are transformed by NormalMatrix(model), the inverse transpose of
 //     the model matrix' upper-left 3x3, so they stay perpendicular to their
 //     surface under non-uniform scaling.
+//   - Rotations are also available as quaternions (Quat), in the same
+//     right-handed convention: QuatFromAxisAngle(V3(0,1,0), t).Mat4() == RotateY(t)
+//     and QuatFromEuler(x,y,z) == Rz·Ry·Rx. Quat.Mat4 is zero-value-safe, so a
+//     zero quaternion yields the identity.
 //
 // The package is free of global state and depends only on the standard library.
 package math3d

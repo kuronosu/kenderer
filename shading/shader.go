@@ -33,7 +33,14 @@ type Lambert struct {
 	Material Material
 }
 
-// Shade implements Shader.
+// Shade implements Shader. In linear RGB the shaded color is
+//
+//	base * (ambient + lightColor * intensity * max(0, dot(N, L)))
+//
+// where base = Material.Albedo * Fragment.Color (componentwise), N is the
+// normalized fragment normal and L points toward the light. The surface is thus
+// modulated by the albedo/vertex color and the light color, not only by the light
+// intensity. sRGB encoding happens later, in ToRGBA.
 func (s Lambert) Shade(f Fragment) math3d.Vec3 {
 	n := f.Normal.Normalize()
 	toLight := s.Light.Direction.Normalize().Neg()

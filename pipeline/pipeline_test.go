@@ -67,7 +67,7 @@ func TestRenderCullsBackFace(t *testing.T) {
 
 func TestRenderCube(t *testing.T) {
 	scn := testScene(geometry.NewCube(1.5))
-	scn.Objects[0].Transform.Rotation = math3d.V3(0.5, 0.7, 0) // show three faces
+	scn.Objects[0].Transform.Rotation = math3d.QuatFromEuler(0.5, 0.7, 0) // show three faces
 
 	fb := newTestRenderer().Render(scn)
 

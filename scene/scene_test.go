@@ -12,7 +12,7 @@ func TestTransformMatrixOrder(t *testing.T) {
 	// (1,0,0) -> scale (2,0,0) -> RotateY(90) (0,0,-2) -> translate (10,0,-2).
 	tr := Transform{
 		Position: math3d.V3(10, 0, 0),
-		Rotation: math3d.V3(0, math.Pi/2, 0),
+		Rotation: math3d.QuatFromEuler(0, math.Pi/2, 0),
 		Scale:    math3d.V3(2, 2, 2),
 	}
 	got := tr.Matrix().MulVec4(math3d.V4(1, 0, 0, 1))

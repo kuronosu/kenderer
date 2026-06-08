@@ -67,16 +67,19 @@ func run(width, height, fps int, duration time.Duration, out string, fovDeg floa
 	})
 
 	// frame is deterministic in t: the cube makes exactly one turn about Y over
-	// the whole duration, so the GIF loops seamlessly. The elevated camera
-	// reveals the top face.
+	// the whole duration (a seamless loop), composed with a fixed slight tilt
+	// about X. The elevated camera reveals the top face.
+	const tiltX = 0.15
 	frame := func(t time.Duration) image.Image {
 		angle := 2 * math.Pi * t.Seconds() / duration.Seconds()
+		rotation := math3d.QuatFromAxisAngle(math3d.V3(1, 0, 0), tiltX).
+			Mul(math3d.QuatFromAxisAngle(math3d.V3(0, 1, 0), angle))
 		scn := scene.Scene{
 			Camera: camera,
 			Objects: []scene.Object{{
 				Mesh: cube,
 				Transform: scene.Transform{
-					Rotation: math3d.V3(0, angle, 0),
+					Rotation: rotation,
 					Scale:    math3d.V3(1, 1, 1),
 				},
 				Material: shading.Material{Albedo: math3d.V3(1, 1, 1)},
