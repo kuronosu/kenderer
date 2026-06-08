@@ -1,0 +1,38 @@
+# Binarios compilados
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Salida de tests
+*.test
+*.out
+
+# Cobertura
+*.cover
+coverage.*
+coverage/
+
+# Artefactos generados por el renderer
+*.gif
+*.png
+*.ppm
+
+# Caché y workspace de Go
+go.work
+go.work.sum
+/vendor/
+
+# Directorios de IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+
+# ALL GO FILES
+!*.go
