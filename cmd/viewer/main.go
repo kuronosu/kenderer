@@ -2,7 +2,8 @@
 
 // Command viewer renders the kenderer cube in a live, resizable window with an
 // orbit camera: drag to orbit, scroll to zoom, middle-drag (or shift+drag) to
-// pan, Escape or the close button to quit.
+// pan, F1 to toggle the FPS/frame-time overlay, Escape or the close button to
+// quit.
 //
 // It is built only with the "sdl" tag:
 //
@@ -58,6 +59,8 @@ func main() {
 	fovDeg := flag.Float64("fov", 50, "vertical field of view in degrees")
 	modelPath := flag.String("model", "", "model to load (.obj, .gltf, .glb); empty = built-in cube")
 	texPath := flag.String("texture", "", "albedo texture for an OBJ without a material (optional)")
+	stats := flag.Bool("stats", true, "show FPS/frame-time overlay (toggle with F1)")
+	fullscreen := flag.Bool("fullscreen", false, "open fullscreen; bypasses the compositor so FPS reflects raw throughput")
 	flag.Parse()
 
 	fovy := *fovDeg * math.Pi / 180
@@ -85,7 +88,7 @@ func main() {
 	}
 	v.cam.Apply(&v.scn.Camera) // initial pose before the first frame
 
-	cfg := platform.Config{Title: "kenderer viewer", Width: *width, Height: *height, FPS: *fps}
+	cfg := platform.Config{Title: "kenderer viewer", Width: *width, Height: *height, FPS: *fps, ShowStats: *stats, Fullscreen: *fullscreen}
 	if err := platform.Run(cfg, v); err != nil {
 		fmt.Fprintln(os.Stderr, "viewer:", err)
 		os.Exit(1)

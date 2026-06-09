@@ -20,11 +20,17 @@ import (
 	"github.com/kuronosu/kenderer/input"
 )
 
+// bgR, bgG, bgB, bgA are the renderer's clear color; it is also restored after
+// the stats overlay temporarily changes the draw color (see drawStats).
+const bgR, bgG, bgB, bgA uint8 = 18, 18, 24, 255
+
 // Config configures the window and loop.
 type Config struct {
 	Title         string
 	Width, Height int
-	FPS           int // target frames per second (<= 0 means 60)
+	FPS           int  // target frames per second (<= 0 means 60)
+	ShowStats     bool // show the FPS/frame-time overlay (toggle at runtime with F1)
+	Fullscreen    bool // open fullscreen; bypasses the desktop compositor's Present pacing
 }
 
 // App is the interactive application driven by the loop. Update receives the
@@ -50,7 +56,13 @@ func Run(cfg Config, app App) error {
 	}
 	defer sdl.Quit()
 
-	window, renderer, err := sdl.CreateWindowAndRenderer(cfg.Title, cfg.Width, cfg.Height, sdl.WINDOW_RESIZABLE)
+	flags := sdl.WINDOW_RESIZABLE
+	if cfg.Fullscreen {
+		// Fullscreen lets the swapchain bypass the windowed compositor (DWM),
+		// which otherwise paces Present to the display's refresh rate.
+		flags |= sdl.WINDOW_FULLSCREEN
+	}
+	window, renderer, err := sdl.CreateWindowAndRenderer(cfg.Title, cfg.Width, cfg.Height, flags)
 	if err != nil {
 		return fmt.Errorf("platform: create window/renderer: %w", err)
 	}
@@ -74,7 +86,7 @@ func Run(cfg Config, app App) error {
 		}
 	}()
 
-	if err := renderer.SetDrawColor(18, 18, 24, 255); err != nil {
+	if err := renderer.SetDrawColor(bgR, bgG, bgB, bgA); err != nil {
 		return fmt.Errorf("platform: set draw color: %w", err)
 	}
 
@@ -86,6 +98,18 @@ func Run(cfg Config, app App) error {
 		fps = 60
 	}
 	frameBudget := time.Second / time.Duration(fps)
+
+	// Stats overlay state. showStats is the live toggle (F1); the counters
+	// accumulate over statInterval and feed the smoothed statText.
+	showStats := cfg.ShowStats
+	var prevF1 bool
+	const statInterval = 500 * time.Millisecond
+	var (
+		statFrames int
+		statWall   time.Duration // wall-clock elapsed, for FPS
+		statBusy   time.Duration // per-frame work, for ms
+		statText   = "-- FPS  -- ms"
+	)
 
 	last := time.Now()
 	var event sdl.Event
@@ -140,6 +164,13 @@ func Run(cfg Config, app App) error {
 			in.Quit = true
 		}
 
+		// F1 toggles the stats overlay on the press edge (not while held).
+		f1 := keys[int(sdl.SCANCODE_F1)]
+		if f1 && !prevF1 {
+			showStats = !showStats
+		}
+		prevF1 = f1
+
 		app.Update(dt, in)
 
 		img := app.Render()
@@ -153,8 +184,28 @@ func Run(cfg Config, app App) error {
 		if err := renderer.RenderTexture(texture, nil, nil); err != nil {
 			return fmt.Errorf("platform: render texture: %w", err)
 		}
+		if showStats {
+			if err := drawStats(renderer, statText); err != nil {
+				return fmt.Errorf("platform: draw stats: %w", err)
+			}
+		}
+		// busy is the frame's work, measured BEFORE Present so neither a
+		// vsync-blocking Present nor the frame-cap sleep below leaks into it.
+		busy := time.Since(frameStart)
 		if err := renderer.Present(); err != nil {
 			return fmt.Errorf("platform: present: %w", err)
+		}
+
+		// Smoothed stats, refreshed ~twice a second so the text doesn't flicker:
+		// FPS from wall-clock dt, ms from work time (real cost even when capped).
+		statFrames++
+		statWall += dt
+		statBusy += busy
+		if statWall >= statInterval {
+			statFPS := float64(statFrames) / statWall.Seconds()
+			statMS := statBusy.Seconds() / float64(statFrames) * 1000
+			statText = fmt.Sprintf("%.0f FPS  %.1f ms", statFPS, statMS)
+			statFrames, statWall, statBusy = 0, 0, 0
 		}
 
 		if slack := frameBudget - time.Since(frameStart); slack > 0 {
@@ -162,4 +213,24 @@ func Run(cfg Config, app App) error {
 		}
 	}
 	return nil
+}
+
+// drawStats overlays the smoothed FPS/ms text in the top-left corner using SDL's
+// built-in 8x8 debug font, scaled 3x for legibility. It restores the render scale
+// and the background draw color afterward so the next frame's Clear and texture
+// blit are unaffected (both persist across frames otherwise).
+func drawStats(r *sdl.Renderer, text string) error {
+	if err := r.SetScale(3, 3); err != nil { // 8x8 glyphs -> ~24px tall
+		return err
+	}
+	if err := r.SetDrawColor(0, 255, 0, 255); err != nil { // green
+		return err
+	}
+	if err := r.DebugText(2, 2, text); err != nil { // (2,2) in scaled space -> (6,6) px
+		return err
+	}
+	if err := r.SetScale(1, 1); err != nil { // reset so the next blit is 1:1
+		return err
+	}
+	return r.SetDrawColor(bgR, bgG, bgB, bgA) // restore the Clear() color
 }

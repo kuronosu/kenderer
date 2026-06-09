@@ -29,13 +29,25 @@ the GIF exporter above stay zero-dependency.
 
 ```sh
 # Build/run the viewer (the sdl tag is required)
-go run -tags sdl ./cmd/viewer -w 800 -h 600 -fps 60 -fov 50
+go run -tags sdl ./cmd/viewer -w 800 -h 600 -fps 60 -fov 50 -stats
 ```
 
 Controls: **drag** to orbit, **scroll** to zoom, **middle-drag** (or
-**shift+drag**) to pan, **Escape** or the close button to quit. The framebuffer
-tracks the window's pixel size, so resizing stays crisp and undistorted (HiDPI
-included).
+**shift+drag**) to pan, **F1** to toggle the FPS overlay, **Escape** or the close
+button to quit. The framebuffer tracks the window's pixel size, so resizing stays
+crisp and undistorted (HiDPI included).
+
+The `-stats` overlay (on by default) shows two numbers, e.g. `60 FPS  3.0 ms`. The
+**FPS** is wall-clock; the **ms** is the per-frame *work* time, so it reflects the
+real rasterizer cost — the approximate uncapped throughput is `1000/ms`, even when
+the FPS is pinned by something else.
+
+In a window the FPS is usually pinned by the desktop compositor pacing `Present` to
+the display's refresh (often a dynamic 40–60 Hz on laptops), not by `-fps` — so the
+FPS reads the refresh while the **ms** stays the true measurement. To see raw
+throughput in the FPS number too, run with `-fullscreen`: it bypasses the compositor.
+The framebuffer then covers the whole screen, so the per-frame **ms** rises with the
+larger pixel count.
 
 SDL3 itself does **not** need to be installed:
 
