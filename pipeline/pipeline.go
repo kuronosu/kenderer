@@ -2,6 +2,9 @@ package pipeline
 
 import (
 	"image/color"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"github.com/kuronosu/kenderer/framebuffer"
 	"github.com/kuronosu/kenderer/geometry"
@@ -25,6 +28,10 @@ type Options struct {
 	Width, Height int
 	Cull          CullMode
 	Background    color.RGBA
+	// Workers caps the goroutines used to fill (rasterize) a frame. 0 means auto
+	// (runtime.GOMAXPROCS); 1 forces the serial path. The rendered image is
+	// identical for any value — only throughput changes.
+	Workers int
 }
 
 // Renderer renders scenes into a single framebuffer that is reused across frames.
@@ -32,6 +39,14 @@ type Renderer struct {
 	opts     Options
 	fb       *framebuffer.Buffer
 	viewport math3d.Mat4
+
+	workers int
+	// prepared is the per-frame buffer of screen-space triangles produced by the
+	// serial geometry phase and consumed by the parallel fill. It is reused across
+	// frames (reset to length 0, grown on demand) so the hot path makes no garbage.
+	prepared []raster.Prepared
+	// bandCursor hands scanline bands to fill workers (atomic = dynamic schedule).
+	bandCursor atomic.Int64
 }
 
 // NewRenderer creates a Renderer with the given options. Width and Height must be
@@ -41,6 +56,7 @@ func NewRenderer(opts Options) *Renderer {
 		opts:     opts,
 		fb:       framebuffer.New(opts.Width, opts.Height),
 		viewport: math3d.Viewport(0, 0, float64(opts.Width), float64(opts.Height)),
+		workers:  opts.Workers,
 	}
 }
 
@@ -65,11 +81,19 @@ func (r *Renderer) Render(s scene.Scene) *framebuffer.Buffer {
 	aspect := float64(r.opts.Width) / float64(r.opts.Height)
 	viewProj := s.Camera.Projection(aspect).Mul(s.Camera.View())
 
+	// Phase 1 (serial): transform, clip, cull and set up every triangle into the
+	// reused prepared buffer, in the exact order the serial path would rasterize
+	// them (object, then triangle, then clip-fan order). This ordering is what
+	// makes the parallel fill bit-identical: each pixel sees its covering
+	// triangles in list order regardless of which worker fills it.
+	r.prepared = r.prepared[:0]
 	for _, obj := range s.Objects {
 		model := obj.Transform.Matrix()
 		mvp := viewProj.Mul(model)
 		normalMat := math3d.NormalMatrix(model)
-		shader := shading.Lambert{
+		// Box the shader once per object; the interface value is then copied (not
+		// re-boxed) into each prepared triangle and only ever read during fill.
+		var shader shading.Shader = shading.Lambert{
 			Light:    s.Light,
 			Ambient:  s.Ambient,
 			Material: obj.Material,
@@ -77,14 +101,18 @@ func (r *Renderer) Render(s scene.Scene) *framebuffer.Buffer {
 		mesh := obj.Mesh
 		for i := 0; i < mesh.NumTriangles(); i++ {
 			a, b, c := mesh.Triangle(i)
-			r.drawTriangle(a, b, c, model, mvp, normalMat, shader, obj.Smooth)
+			r.prepareTriangle(a, b, c, model, mvp, normalMat, shader, obj.Smooth)
 		}
 	}
+
+	// Phase 2 (parallel): fill the prepared triangles across disjoint scanline bands.
+	r.fill()
 	return r.fb
 }
 
-// drawTriangle runs the per-triangle stages: vertex transform, normal selection,
-// frustum clip, then rasterization of each resulting sub-triangle.
+// prepareTriangle runs the per-triangle geometry stages: vertex transform, normal
+// selection and frustum clip, appending each resulting sub-triangle to the
+// prepared buffer (via prepare). It does no rasterization; the fill phase does.
 //
 // When smooth is false (flat shading) the per-vertex normals are replaced by the
 // triangle's geometric face normal, computed once on the original (pre-clip)
@@ -95,7 +123,7 @@ func (r *Renderer) Render(s scene.Scene) *framebuffer.Buffer {
 // kept, so CombineFragment yields a per-fragment normal and Lambert produces
 // Phong shading; the face-normal path also serves as the fallback for meshes
 // without usable normals.
-func (r *Renderer) drawTriangle(a, b, c geometry.Vertex, model, mvp math3d.Mat4, normalMat math3d.Mat3, shader shading.Shader, smooth bool) {
+func (r *Renderer) prepareTriangle(a, b, c geometry.Vertex, model, mvp math3d.Mat4, normalMat math3d.Mat3, shader shading.Shader, smooth bool) {
 	v0 := processVertex(a, model, mvp, normalMat)
 	v1 := processVertex(b, model, mvp, normalMat)
 	v2 := processVertex(c, model, mvp, normalMat)
@@ -108,7 +136,7 @@ func (r *Renderer) drawTriangle(a, b, c geometry.Vertex, model, mvp math3d.Mat4,
 	}
 
 	for _, tri := range clipTriangle(v0, v1, v2) {
-		r.rasterize(tri, shader)
+		r.prepare(tri, shader)
 	}
 }
 
@@ -127,9 +155,11 @@ func processVertex(v geometry.Vertex, model, mvp math3d.Mat4, normalMat math3d.M
 	}
 }
 
-// rasterize performs the perspective divide, viewport transform and backface
-// cull for one clipped triangle, then hands it to the rasterizer.
-func (r *Renderer) rasterize(tri [3]clipVertex, shader shading.Shader) {
+// prepare performs the perspective divide, viewport transform and backface cull
+// for one clipped triangle, then appends it — with its rasterization setup — to
+// the prepared buffer. Culled and degenerate (zero-area) triangles are dropped,
+// exactly as the serial path skipped them, so they never reach the fill phase.
+func (r *Renderer) prepare(tri [3]clipVertex, shader shading.Shader) {
 	var rv [3]raster.Vertex
 	for i, cv := range tri {
 		invW := 1 / cv.Pos.W
@@ -141,7 +171,63 @@ func (r *Renderer) rasterize(tri [3]clipVertex, shader shading.Shader) {
 	if r.culls(area) {
 		return
 	}
-	raster.DrawTriangle(r.fb, rv[0], rv[1], rv[2], shader)
+	if p, ok := raster.Prepare(rv[0], rv[1], rv[2], area, r.opts.Width, r.opts.Height, shader); ok {
+		r.prepared = append(r.prepared, p)
+	}
+}
+
+// bandsPerWorker is the average number of scanline bands handed to each fill
+// worker. Using several bands per worker lets the atomic dispatch balance uneven
+// triangle coverage (dynamic scheduling); too many would add per-band overhead.
+const bandsPerWorker = 8
+
+// fill rasterizes the prepared triangles into the framebuffer. It splits the rows
+// into bands handed out by an atomic counter to a pool of workers; each worker
+// loops, claiming bands until they run out, and rasterizes every prepared
+// triangle clamped to its band's rows. Because bands are disjoint row ranges, no
+// two workers ever touch the same pixel or depth cell, so the framebuffer needs
+// no locking. With workers == 1 the bands run inline on the caller — exactly the
+// serial path. The rendered image is identical for any worker or band count.
+func (r *Renderer) fill() {
+	workers := r.workers
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	h := r.opts.Height
+
+	if workers == 1 || h <= 1 || len(r.prepared) == 0 {
+		for k := range r.prepared {
+			raster.DrawBand(r.fb, &r.prepared[k], 0, h)
+		}
+		return
+	}
+
+	bandRows := h / (workers * bandsPerWorker)
+	if bandRows < 1 {
+		bandRows = 1
+	}
+	numBands := (h + bandRows - 1) / bandRows // ceil(h / bandRows)
+
+	r.bandCursor.Store(0)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
+			defer wg.Done()
+			for {
+				b := int(r.bandCursor.Add(1)) - 1
+				if b >= numBands {
+					return
+				}
+				y0 := b * bandRows
+				y1 := min(y0+bandRows, h)
+				for k := range r.prepared {
+					raster.DrawBand(r.fb, &r.prepared[k], y0, y1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // culls reports whether a triangle with the given screen-space signed area is

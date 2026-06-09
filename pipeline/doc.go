@@ -14,6 +14,18 @@
 //   - Backface culling uses the screen-space signed area; with the Y-flipping
 //     viewport, a front face (CCW in NDC) has negative area.
 //
+// Render runs in two phases. The geometry phase is serial: it transforms, clips,
+// culls and sets up every triangle into a reused buffer of screen-space
+// "prepared" triangles, in the order the triangles would be rasterized. The fill
+// phase is parallel: the framebuffer rows are split into scanline bands handed to
+// a pool of workers by an atomic counter (dynamic scheduling), and each worker
+// rasterizes the prepared triangles clamped to the bands it claims. Bands are
+// disjoint row ranges, so workers never touch the same pixel or depth cell and
+// the framebuffer needs no locking. Because each pixel is owned by one worker and
+// every worker walks the prepared list in the same order, the depth test and
+// top-left fill rule resolve ties exactly as in serial: the image is bit-identical
+// for any worker count (Options.Workers; 0 = GOMAXPROCS, 1 = the serial path).
+//
 // A Renderer reuses one framebuffer across frames; see Render for the returned
 // buffer's lifetime.
 package pipeline

@@ -61,6 +61,7 @@ func main() {
 	texPath := flag.String("texture", "", "albedo texture for an OBJ without a material (optional)")
 	stats := flag.Bool("stats", true, "show FPS/frame-time overlay (toggle with F1)")
 	fullscreen := flag.Bool("fullscreen", false, "open fullscreen; bypasses the compositor so FPS reflects raw throughput")
+	workers := flag.Int("workers", 0, "fill worker goroutines (0 = auto = GOMAXPROCS, 1 = serial)")
 	flag.Parse()
 
 	fovy := *fovDeg * math.Pi / 180
@@ -77,6 +78,7 @@ func main() {
 			Height:     *height,
 			Cull:       pipeline.CullBack,
 			Background: color.RGBA{R: 18, G: 18, B: 24, A: 255},
+			Workers:    *workers,
 		}),
 		scn: scene.Scene{
 			Camera:  scene.Camera{Up: math3d.V3(0, 1, 0), FOVY: fovy, Near: near, Far: far},

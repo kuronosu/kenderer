@@ -30,15 +30,16 @@ func main() {
 	duration := flag.Duration("dur", 4*time.Second, "animation duration (one full rotation)")
 	out := flag.String("out", "cube.gif", "output GIF path")
 	fovDeg := flag.Float64("fov", 50, "vertical field of view in degrees")
+	workers := flag.Int("workers", 0, "fill worker goroutines (0 = auto = GOMAXPROCS, 1 = serial)")
 	flag.Parse()
 
-	if err := run(*width, *height, *fps, *duration, *out, *fovDeg); err != nil {
+	if err := run(*width, *height, *fps, *duration, *out, *fovDeg, *workers); err != nil {
 		fmt.Fprintln(os.Stderr, "cube:", err)
 		os.Exit(1)
 	}
 }
 
-func run(width, height, fps int, duration time.Duration, out string, fovDeg float64) error {
+func run(width, height, fps int, duration time.Duration, out string, fovDeg float64, workers int) error {
 	if width <= 0 || height <= 0 {
 		return fmt.Errorf("width and height must be positive (got %dx%d)", width, height)
 	}
@@ -64,6 +65,7 @@ func run(width, height, fps int, duration time.Duration, out string, fovDeg floa
 		Height:     height,
 		Cull:       pipeline.CullBack,
 		Background: color.RGBA{R: 18, G: 18, B: 24, A: 255},
+		Workers:    workers,
 	})
 
 	// frame is deterministic in t: the cube makes exactly one turn about Y over
