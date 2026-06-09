@@ -77,28 +77,35 @@ func (r *Renderer) Render(s scene.Scene) *framebuffer.Buffer {
 		mesh := obj.Mesh
 		for i := 0; i < mesh.NumTriangles(); i++ {
 			a, b, c := mesh.Triangle(i)
-			r.drawTriangle(a, b, c, model, mvp, normalMat, shader)
+			r.drawTriangle(a, b, c, model, mvp, normalMat, shader, obj.Smooth)
 		}
 	}
 	return r.fb
 }
 
-// drawTriangle runs the per-triangle stages: vertex transform, flat face normal,
+// drawTriangle runs the per-triangle stages: vertex transform, normal selection,
 // frustum clip, then rasterization of each resulting sub-triangle.
-func (r *Renderer) drawTriangle(a, b, c geometry.Vertex, model, mvp math3d.Mat4, normalMat math3d.Mat3, shader shading.Shader) {
+//
+// When smooth is false (flat shading) the per-vertex normals are replaced by the
+// triangle's geometric face normal, computed once on the original (pre-clip)
+// triangle in world space, so the clipper carries a constant normal to every
+// fragment. Recomputing it per clipped sub-triangle would be unstable on the
+// near-degenerate slivers clipping can produce. When smooth is true the
+// interpolated per-vertex normals (already transformed by the normal matrix) are
+// kept, so CombineFragment yields a per-fragment normal and Lambert produces
+// Phong shading; the face-normal path also serves as the fallback for meshes
+// without usable normals.
+func (r *Renderer) drawTriangle(a, b, c geometry.Vertex, model, mvp math3d.Mat4, normalMat math3d.Mat3, shader shading.Shader, smooth bool) {
 	v0 := processVertex(a, model, mvp, normalMat)
 	v1 := processVertex(b, model, mvp, normalMat)
 	v2 := processVertex(c, model, mvp, normalMat)
 
-	// Flat shading: compute the face normal once on the original (pre-clip)
-	// triangle in world space and assign it to all three vertices, so the clipper
-	// carries a constant normal to every fragment. Recomputing it per clipped
-	// sub-triangle would be unstable on the near-degenerate slivers clipping can
-	// produce.
-	n := faceNormal(v0.Frag.WorldPos, v1.Frag.WorldPos, v2.Frag.WorldPos)
-	v0.Frag.Normal = n
-	v1.Frag.Normal = n
-	v2.Frag.Normal = n
+	if !smooth {
+		n := faceNormal(v0.Frag.WorldPos, v1.Frag.WorldPos, v2.Frag.WorldPos)
+		v0.Frag.Normal = n
+		v1.Frag.Normal = n
+		v2.Frag.Normal = n
+	}
 
 	for _, tri := range clipTriangle(v0, v1, v2) {
 		r.rasterize(tri, shader)

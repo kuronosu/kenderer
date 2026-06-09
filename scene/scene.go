@@ -1,6 +1,8 @@
 package scene
 
 import (
+	"math"
+
 	"github.com/kuronosu/kenderer/geometry"
 	"github.com/kuronosu/kenderer/math3d"
 	"github.com/kuronosu/kenderer/shading"
@@ -38,11 +40,16 @@ func (t Transform) Matrix() math3d.Mat4 {
 	return math3d.Translate(t.Position).Mul(t.Rotation.Mat4()).Mul(math3d.Scale(t.Scale))
 }
 
-// Object is a mesh placed in the world with a material.
+// Object is a mesh placed in the world with a material. Smooth selects the
+// shading mode: when false (the default) the renderer flat-shades each triangle
+// with its geometric face normal; when true it keeps the interpolated per-vertex
+// normals, yielding smooth (Phong) shading. Flatness is a property of the model,
+// so a flat-shaded cube and a smooth imported mesh can share one scene.
 type Object struct {
 	Mesh      *geometry.Mesh
 	Transform Transform
 	Material  shading.Material
+	Smooth    bool
 }
 
 // Scene bundles everything the renderer needs to draw one frame.
@@ -51,4 +58,24 @@ type Scene struct {
 	Objects []Object
 	Light   shading.DirectionalLight
 	Ambient float64
+}
+
+// Bounds returns the combined axis-aligned bounding box of the objects' meshes,
+// as its minimum and maximum corners. It unions each mesh's local-space Bounds
+// and does not apply per-object Transforms: loaded models are mounted with an
+// identity transform (the asset loaders bake world-space geometry), so mesh space
+// is world space for them. An empty slice returns the zero box.
+func Bounds(objects []Object) (min, max math3d.Vec3) {
+	if len(objects) == 0 {
+		return math3d.Vec3{}, math3d.Vec3{}
+	}
+	inf := math.Inf(1)
+	min = math3d.V3(inf, inf, inf)
+	max = math3d.V3(-inf, -inf, -inf)
+	for _, o := range objects {
+		lo, hi := o.Mesh.Bounds()
+		min = min.Min(lo)
+		max = max.Max(hi)
+	}
+	return min, max
 }

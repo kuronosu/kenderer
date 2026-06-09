@@ -1,0 +1,3 @@
+newmtl sphere
+Kd 1 1 1
+map_Kd sphere_uv.png

@@ -18,6 +18,8 @@ coverage/
 *.gif
 *.png
 *.ppm
+# ...pero conserva la textura del asset de ejemplo (.obj autocontenido)
+!examples/sphere_uv.png
 
 # Caché y workspace de Go
 go.work

@@ -3,6 +3,8 @@ package geometry
 import (
 	"math"
 	"testing"
+
+	"github.com/kuronosu/kenderer/math3d"
 )
 
 func TestNewCubeCounts(t *testing.T) {
@@ -37,6 +39,17 @@ func TestNewCubeWindingOutward(t *testing.T) {
 		if dot := geo.Dot(a.Normal); dot < 0.999 {
 			t.Errorf("triangle %d winds inward: geo·normal = %v", i, dot)
 		}
+	}
+}
+
+func TestMeshBounds(t *testing.T) {
+	lo, hi := NewCube(2).Bounds() // side 2, centered → half-extent 1
+	if lo != math3d.V3(-1, -1, -1) || hi != math3d.V3(1, 1, 1) {
+		t.Errorf("cube bounds = (%v, %v), want (-1,-1,-1)..(1,1,1)", lo, hi)
+	}
+
+	if lo, hi := (&Mesh{}).Bounds(); lo != (math3d.Vec3{}) || hi != (math3d.Vec3{}) {
+		t.Errorf("empty mesh bounds = (%v, %v), want zero box", lo, hi)
 	}
 }
 

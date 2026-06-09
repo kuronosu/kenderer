@@ -22,6 +22,22 @@ type Mesh struct {
 // NumTriangles reports how many triangles the index buffer describes.
 func (m *Mesh) NumTriangles() int { return len(m.Indices) / 3 }
 
+// Bounds returns the axis-aligned bounding box of the mesh's vertex positions as
+// its minimum and maximum corners. An empty mesh returns the zero box. Callers
+// use it to frame a loaded model (center plus radius) for the camera.
+func (m *Mesh) Bounds() (min, max math3d.Vec3) {
+	if len(m.Vertices) == 0 {
+		return math3d.Vec3{}, math3d.Vec3{}
+	}
+	min = m.Vertices[0].Position
+	max = min
+	for _, v := range m.Vertices[1:] {
+		min = min.Min(v.Position)
+		max = max.Max(v.Position)
+	}
+	return min, max
+}
+
 // Triangle returns the three vertices of triangle i, where 0 <= i < NumTriangles.
 func (m *Mesh) Triangle(i int) (a, b, c Vertex) {
 	j := i * 3

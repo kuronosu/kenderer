@@ -68,6 +68,16 @@ func (v Vec3) Normalize() Vec3 {
 // Lerp linearly interpolates between v (t=0) and u (t=1).
 func (v Vec3) Lerp(u Vec3, t float64) Vec3 { return v.Add(u.Sub(v).Scale(t)) }
 
+// Min returns the componentwise minimum of v and u.
+func (v Vec3) Min(u Vec3) Vec3 {
+	return Vec3{math.Min(v.X, u.X), math.Min(v.Y, u.Y), math.Min(v.Z, u.Z)}
+}
+
+// Max returns the componentwise maximum of v and u.
+func (v Vec3) Max(u Vec3) Vec3 {
+	return Vec3{math.Max(v.X, u.X), math.Max(v.Y, u.Y), math.Max(v.Z, u.Z)}
+}
+
 // XY drops the Z component.
 func (v Vec3) XY() Vec2 { return Vec2{v.X, v.Y} }
 

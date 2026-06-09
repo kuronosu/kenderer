@@ -1,11 +1,15 @@
 package shading
 
 import (
+	"bytes"
+	"image"
 	"image/color"
+	"image/png"
 	"math"
 	"testing"
 
 	"github.com/kuronosu/kenderer/math3d"
+	"github.com/kuronosu/kenderer/texture"
 )
 
 func TestLambertFacingAndAway(t *testing.T) {
@@ -61,6 +65,42 @@ func TestLerpFragment(t *testing.T) {
 	}
 	if m.UV != math3d.V2(0.5, 0.5) {
 		t.Errorf("lerp uv = %v, want (0.5,0.5)", m.UV)
+	}
+}
+
+func TestLambertSamplesAlbedoTexture(t *testing.T) {
+	// 2x2 albedo, origin top-left: (0,0)=red (1,0)=green / (0,1)=blue (1,1)=white.
+	// Loaded as KindData so the texel colors stay exact (no sRGB shift).
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	img.Set(0, 0, color.NRGBA{R: 255, A: 255})
+	img.Set(1, 0, color.NRGBA{G: 255, A: 255})
+	img.Set(0, 1, color.NRGBA{B: 255, A: 255})
+	img.Set(1, 1, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	tex, err := texture.LoadTexture(&buf, texture.KindData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sh := Lambert{
+		Light:    DirectionalLight{Direction: math3d.V3(0, 0, -1), Color: math3d.V3(1, 1, 1), Intensity: 1},
+		Ambient:  0,
+		Material: Material{Albedo: math3d.V3(1, 1, 1), AlbedoTex: tex, Filter: texture.Nearest, Wrap: texture.Repeat},
+	}
+	// With N·L = 1 and Ambient = 0, the shaded color equals the sampled texel, so
+	// the UV alone selects the output color (validates perspective-correct UV →
+	// texture, no rasterizer change needed).
+	frag := func(u, v float64) Fragment {
+		return Fragment{Normal: math3d.V3(0, 0, 1), UV: math3d.V2(u, v), Color: math3d.V3(1, 1, 1)}
+	}
+	if got, want := sh.Shade(frag(0.25, 0.25)), math3d.V3(1, 0, 0); got != want {
+		t.Errorf("shade @ (0.25,0.25) = %v, want %v (red texel)", got, want)
+	}
+	if got, want := sh.Shade(frag(0.75, 0.25)), math3d.V3(0, 1, 0); got != want {
+		t.Errorf("shade @ (0.75,0.25) = %v, want %v (green texel)", got, want)
 	}
 }
 

@@ -9,21 +9,27 @@ GPU), evolving into a small interactive 3D engine / tool. Module
 `github.com/kuronosu/kenderer`, Go 1.26.4.
 
 ## 2. Hard constraints
-- **Core = ZERO third-party dependencies** (stdlib only). `go build ./...` and the
-  GIF export path must stay dependency-free.
+- **Renderer core + GIF path = ZERO third-party imports** (stdlib only): math3d,
+  framebuffer, geometry, texture, shading, raster, scene, pipeline, present and
+  `cmd/cube` import no third-party code.
 - Only allowed deps, strictly confined to where they are imported:
   - **SDL3** (`Zyko0/go-sdl3` + `ebitengine/purego`) behind `//go:build sdl`, only
     in `platform/` and `cmd/viewer`.
-  - **glTF** (`qmuntal/gltf`) only in `asset/gltf` (F3 — not created yet).
+  - **glTF** (`qmuntal/gltf`, pure Go — no native lib) only in `asset/gltf`. It is
+    *not* build-tag gated, so `go build ./...` does pull it into the module graph;
+    the core/GIF packages above still import nothing third-party.
 
 ## 3. Architecture (DAG, `math3d` at the bottom)
 - Bottom (stdlib-only): `math3d` (vec/mat/transform/quat), `framebuffer` (color +
   depth target).
-- `geometry`,`shading` → math3d · `raster` → math3d,framebuffer,shading ·
-  `scene` → math3d,geometry,shading · `pipeline` → all of those · `present`
-  (stdlib) and `cmd/cube` consume pipeline/framebuffer.
+- `geometry`→math3d · `texture`→math3d (stdlib image) · `shading`→math3d,texture ·
+  `raster`→math3d,framebuffer,shading · `scene`→math3d,geometry,shading ·
+  `pipeline`→all of those · `asset`→geometry,texture,math3d ·
+  `asset/gltf`→asset,geometry,texture,math3d,**qmuntal/gltf** · `present` (stdlib)
+  and `cmd/cube` consume pipeline/framebuffer/present.
 - Interactive: `input` (stdlib) → `camera` (→math3d,scene,input). SDL-gated:
-  `platform` → sdl,input ; `cmd/viewer` → platform,pipeline,scene,camera.
+  `platform` → sdl,input ; `cmd/viewer` → platform,pipeline,scene,camera,asset,
+  asset/gltf,texture.
 - **Flex points:** input is decoupled — `input.Frame` is our own type; camera and
   the loop depend on it, never on SDL. Rendering is isolated in `pipeline` so a
   GPU backend can later sit behind a `Renderer` interface (F4); today
@@ -40,19 +46,29 @@ GPU), evolving into a small interactive 3D engine / tool. Module
   depth is **not** perspective-corrected.
 - Winding: CCW = front in NDC; after the Y-flipping viewport, front faces have
   **negative** screen-space signed area → cull positive area; top-left fill rule.
-- Normals: inverse-transpose of the model's upper-left 3×3 (`NormalMatrix`). Flat
-  shading uses the face normal computed **once** on the original pre-clip triangle.
+- Normals: inverse-transpose of the model's upper-left 3×3 (`NormalMatrix`). Shading
+  mode is **per-object** (`scene.Object.Smooth`): flat (default) replaces the vertex
+  normals with the face normal computed **once** on the original pre-clip triangle;
+  smooth keeps the interpolated per-vertex normals → Phong (Lambert normalizes the
+  fragment normal, since interpolation denormalizes it). Imported meshes load smooth;
+  the procedural cube stays flat.
 - Rotation: `scene.Transform.Rotation` is `math3d.Quat`; `QuatFromEuler == Rz·Ry·Rx`;
   `Quat.Mat4` is zero-value-safe (zero `Quat{}` → identity).
 - Color: shade in **linear** RGB; `shading.ToRGBA` encodes linear→sRGB once, at
-  output. (F3: sample albedo textures sRGB→linear before shading.)
+  output. Albedo textures are decoded sRGB→linear on load (`texture.KindColor`);
+  glTF `baseColorFactor` and `COLOR_0` vertex colors are already linear. Loaders set
+  `Vertex.Color` to white so the shaded base `albedo ⊙ vertexColor` is never zeroed.
 - Clipping: Sutherland–Hodgman in clip space vs the 6 frustum planes, inside
   `pipeline` as pure functions.
 - SDL texture: `PIXELFORMAT_ABGR8888` (little-endian byte order = R,G,B,A of
   `image.RGBA.Pix`; do **not** use RGBA8888); update with `img.Stride`; size to the
   drawable pixels via `Renderer.CurrentOutputSize` (HiDPI). [platform]
-- Textures/assets (F3 target): sampler origin top-left; loaders normalize UV (OBJ
-  flips V, glTF as-is).
+- Textures/assets: `texture.Texture` samples in linear RGB, origin top-left, with
+  Nearest/Bilinear × Repeat/Clamp. Loaders normalize UV to that origin (OBJ flips V;
+  glTF passes through). `asset.LoadOBJ` (zero-dep, OBJ+MTL) and
+  `asset/gltf.LoadGLTF` (qmuntal) return `asset.Model{Mesh, BaseColor, AlbedoTex}`;
+  the caller builds the `shading.Material`. glTF bakes the node transform into
+  world-space positions (flat mesh; live scene graph is F5).
 
 ## 5. Commands (must all pass)
 - `go build ./...` (no SDL) **and** `go build -tags sdl ./...` compile.
@@ -68,6 +84,6 @@ GPU), evolving into a small interactive 3D engine / tool. Module
 - **F1** software renderer + GIF — ✅
 - **F2** window + input + orbit camera (SDL3) — ✅
 - **F3** assets: OBJ + textures (zero-dep) and glTF isolated via `qmuntal/gltf` in
-  `asset/gltf` — ← **NEXT**
-- **F4** GPU backend (WebGPU/OpenGL) behind a `Renderer` interface
+  `asset/gltf`; per-object smooth/flat shading toggle — ✅
+- **F4** GPU backend (WebGPU/OpenGL) behind a `Renderer` interface — ← **NEXT**
 - **F5** scene graph + frustum culling + multi-light
