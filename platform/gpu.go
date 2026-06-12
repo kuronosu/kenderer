@@ -8,6 +8,8 @@ package platform
 //
 //go:generate glslc shaders/src/lambert.vert -o shaders/lambert.vert.spv
 //go:generate glslc shaders/src/lambert.frag -o shaders/lambert.frag.spv
+//go:generate glslc shaders/src/line.vert -o shaders/line.vert.spv
+//go:generate glslc shaders/src/line.frag -o shaders/line.frag.spv
 
 import (
 	_ "embed"
@@ -29,6 +31,10 @@ var (
 	lambertVertSPV []byte
 	//go:embed shaders/lambert.frag.spv
 	lambertFragSPV []byte
+	//go:embed shaders/line.vert.spv
+	lineVertSPV []byte
+	//go:embed shaders/line.frag.spv
+	lineFragSPV []byte
 )
 
 // gpuBackend renders with SDL_GPU. It requests SPIR-V shaders, which pins the
@@ -47,6 +53,14 @@ type gpuBackend struct {
 	window     *sdl.Window
 	renderer   *gpuRenderer
 	objectAxes bool
+
+	// Stats display. SDL_RenderDebugText belongs to the SDL_Renderer (2D) API,
+	// which cannot coexist with a GPU swapchain on the same window, so this
+	// backend shows the stats in the window title instead. baseTitle is the
+	// title at Init; lastStats avoids redundant SetTitle calls (the text only
+	// changes about twice a second).
+	baseTitle string
+	lastStats string
 }
 
 // NewGPUBackend returns the SDL_GPU Backend. The device is created at Init.
@@ -87,11 +101,14 @@ func (b *gpuBackend) Init(window *sdl.Window, w, h int) error {
 		b.Close()
 		return err
 	}
+	renderer.objectAxes = b.objectAxes
 	b.renderer = renderer
+	b.baseTitle = window.Title()
 	return nil
 }
 
-func (b *gpuBackend) RenderFrame(s *scene.Scene, _ string) (time.Duration, error) {
+func (b *gpuBackend) RenderFrame(s *scene.Scene, stats string) (time.Duration, error) {
+	b.updateTitle(stats)
 	cmdbuf, err := b.device.AcquireCommandBuffer()
 	if err != nil {
 		return 0, fmt.Errorf("acquire command buffer: %w", err)
@@ -119,12 +136,31 @@ func (b *gpuBackend) RenderFrame(s *scene.Scene, _ string) (time.Duration, error
 	return busy, nil
 }
 
+// updateTitle reflects the stats text in the window title (empty restores the
+// base title), writing only when the text actually changes.
+func (b *gpuBackend) updateTitle(stats string) {
+	if stats == b.lastStats {
+		return
+	}
+	b.lastStats = stats
+	title := b.baseTitle
+	if stats != "" {
+		title = b.baseTitle + " — " + stats
+	}
+	_ = b.window.SetTitle(title)
+}
+
 // Resize is a no-op: the swapchain tracks the window on acquire, and the depth
 // texture follows the render target's size lazily inside renderScene.
 func (b *gpuBackend) Resize(int, int) error { return nil }
 
-// SetObjectAxes stores the toggle; the GPU line pass consumes it from F4.3 on.
-func (b *gpuBackend) SetObjectAxes(on bool) { b.objectAxes = on }
+// SetObjectAxes toggles the per-object axes drawn by the line pass.
+func (b *gpuBackend) SetObjectAxes(on bool) {
+	b.objectAxes = on
+	if b.renderer != nil {
+		b.renderer.objectAxes = on
+	}
+}
 
 func (b *gpuBackend) Close() {
 	if b.device == nil {
@@ -170,6 +206,18 @@ type gpuRenderer struct {
 	// albedo then rides in the albedoFactor uniform (the CPU semantics: a
 	// material's constant Albedo is used only when it has no map).
 	white *sdl.GPUTexture
+
+	// Line pass (the GPU analog of the CPU pipeline's serial line pass):
+	// world-space segments drawn unlit after the meshes, depth-tested but not
+	// depth-written. The vertex data changes per frame, so it streams through
+	// a persistent, grow-on-demand buffer pair with cycling. objectAxes is the
+	// F3 toggle; world axes (and other caller lines) travel in Scene.Lines.
+	linePipeline *sdl.GPUGraphicsPipeline
+	lineBuf      *sdl.GPUBuffer
+	lineTransfer *sdl.GPUTransferBuffer
+	lineCap      int // capacity of lineBuf/lineTransfer, in float32s
+	lineScratch  []float32
+	objectAxes   bool
 }
 
 // gpuMesh is the uploaded form of a geometry.Mesh.
@@ -189,6 +237,10 @@ type samplerKey struct {
 // normal (3), UV (2), color (3) — the attributes shading.Fragment interpolates.
 const vertexFloats = 11
 
+// lineVertexFloats is the number of float32 per line vertex: position (3) and
+// color (3); lines are unlit and carry no other attributes.
+const lineVertexFloats = 6
+
 func newGPURenderer(device *sdl.GPUDevice, targetFormat sdl.GPUTextureFormat) (*gpuRenderer, error) {
 	r := &gpuRenderer{
 		device:       device,
@@ -199,6 +251,10 @@ func newGPURenderer(device *sdl.GPUDevice, targetFormat sdl.GPUTextureFormat) (*
 		samplers:     make(map[samplerKey]*sdl.GPUSampler),
 	}
 	if err := r.createPipeline(); err != nil {
+		r.destroy()
+		return nil, err
+	}
+	if err := r.createLinePipeline(); err != nil {
 		r.destroy()
 		return nil, err
 	}
@@ -282,6 +338,58 @@ func (r *gpuRenderer) createPipeline() error {
 	return nil
 }
 
+// createLinePipeline builds the line pipeline: LINELIST topology, unlit
+// per-vertex color, no culling (lines have no facing), and — mirroring
+// raster.DrawLine — depth-tested against the meshes but not depth-written.
+func (r *gpuRenderer) createLinePipeline() error {
+	vert, err := r.createShader(lineVertSPV, sdl.GPU_SHADERSTAGE_VERTEX, 0, 1)
+	if err != nil {
+		return fmt.Errorf("create line vertex shader: %w", err)
+	}
+	defer r.device.ReleaseShader(vert)
+	frag, err := r.createShader(lineFragSPV, sdl.GPU_SHADERSTAGE_FRAGMENT, 0, 0)
+	if err != nil {
+		return fmt.Errorf("create line fragment shader: %w", err)
+	}
+	defer r.device.ReleaseShader(frag)
+
+	pipeline, err := r.device.CreateGraphicsPipeline(&sdl.GPUGraphicsPipelineCreateInfo{
+		TargetInfo: sdl.GPUGraphicsPipelineTargetInfo{
+			ColorTargetDescriptions: []sdl.GPUColorTargetDescription{{Format: r.targetFormat}},
+			HasDepthStencilTarget:   true,
+			DepthStencilFormat:      r.depthFormat,
+		},
+		DepthStencilState: sdl.GPUDepthStencilState{
+			CompareOp:        sdl.GPU_COMPAREOP_LESS,
+			EnableDepthTest:  true,
+			EnableDepthWrite: false,
+		},
+		RasterizerState: sdl.GPURasterizerState{
+			FillMode: sdl.GPU_FILLMODE_FILL,
+			CullMode: sdl.GPU_CULLMODE_NONE,
+		},
+		VertexInputState: sdl.GPUVertexInputState{
+			VertexBufferDescriptions: []sdl.GPUVertexBufferDescription{{
+				Slot:      0,
+				InputRate: sdl.GPU_VERTEXINPUTRATE_VERTEX,
+				Pitch:     lineVertexFloats * 4,
+			}},
+			VertexAttributes: []sdl.GPUVertexAttribute{
+				{BufferSlot: 0, Location: 0, Format: sdl.GPU_VERTEXELEMENTFORMAT_FLOAT3, Offset: 0},  // position
+				{BufferSlot: 0, Location: 1, Format: sdl.GPU_VERTEXELEMENTFORMAT_FLOAT3, Offset: 12}, // color
+			},
+		},
+		PrimitiveType:  sdl.GPU_PRIMITIVETYPE_LINELIST,
+		VertexShader:   vert,
+		FragmentShader: frag,
+	})
+	if err != nil {
+		return fmt.Errorf("create line pipeline: %w", err)
+	}
+	r.linePipeline = pipeline
+	return nil
+}
+
 func (r *gpuRenderer) createShader(code []byte, stage sdl.GPUShaderStage, numSamplers, numUniformBuffers uint32) (*sdl.GPUShader, error) {
 	return r.device.CreateGPUShader(&sdl.GPUShaderCreateInfo{
 		Code:              code,
@@ -311,6 +419,13 @@ func (r *gpuRenderer) renderScene(cmdbuf *sdl.GPUCommandBuffer, target *sdl.GPUT
 				return err
 			}
 		}
+	}
+
+	// Stream this frame's line vertices before the render pass opens; the copy
+	// happens on the same command buffer, so it is ordered before the draws.
+	lineVerts, err := r.uploadLines(cmdbuf, s)
+	if err != nil {
+		return err
 	}
 
 	aspect := float64(w) / float64(h)
@@ -365,7 +480,102 @@ func (r *gpuRenderer) renderScene(cmdbuf *sdl.GPUCommandBuffer, target *sdl.GPUT
 		pass.BindIndexBuffer(&sdl.GPUBufferBinding{Buffer: mesh.indices}, sdl.GPU_INDEXELEMENTSIZE_32BIT)
 		pass.DrawIndexedPrimitives(mesh.numIndices, 1, 0, 0, 0)
 	}
+
+	// Line pass, after every mesh draw so the depth test sees the complete
+	// z-buffer — the same ordering as the CPU pipeline's serial line pass.
+	if lineVerts > 0 {
+		pass.BindGraphicsPipeline(r.linePipeline)
+		var vp [16]float32
+		packMat4(vp[:], viewProj)
+		cmdbuf.PushVertexUniformData(0, f32Bytes(vp[:]))
+		pass.BindVertexBuffers([]sdl.GPUBufferBinding{{Buffer: r.lineBuf}})
+		pass.DrawPrimitives(uint32(lineVerts), 1, 0, 0)
+	}
 	pass.End()
+	return nil
+}
+
+// uploadLines gathers this frame's segments (Scene.Lines plus, when enabled,
+// each object's axes from scene.ObjectAxes) and streams their vertices into
+// the line buffer through the persistent transfer buffer, growing both on
+// demand. Cycling keeps the upload from stalling on buffers still referenced
+// by in-flight frames. It returns the number of line vertices to draw; with
+// nothing to draw it records nothing, keeping the feature inert when off.
+func (r *gpuRenderer) uploadLines(cmdbuf *sdl.GPUCommandBuffer, s *scene.Scene) (int, error) {
+	data := r.lineScratch[:0]
+	appendSegment := func(seg scene.Segment) {
+		data = append(data,
+			float32(seg.A.X), float32(seg.A.Y), float32(seg.A.Z),
+			float32(seg.Color.X), float32(seg.Color.Y), float32(seg.Color.Z),
+			float32(seg.B.X), float32(seg.B.Y), float32(seg.B.Z),
+			float32(seg.Color.X), float32(seg.Color.Y), float32(seg.Color.Z))
+	}
+	for _, seg := range s.Lines {
+		appendSegment(seg)
+	}
+	if r.objectAxes {
+		for i := range s.Objects {
+			for _, seg := range scene.ObjectAxes(s.Objects[i]) {
+				appendSegment(seg)
+			}
+		}
+	}
+	r.lineScratch = data
+	if len(data) == 0 {
+		return 0, nil
+	}
+
+	if err := r.ensureLineCapacity(len(data)); err != nil {
+		return 0, err
+	}
+	size := uint32(len(data) * 4)
+
+	ptr, err := r.device.MapTransferBuffer(r.lineTransfer, true)
+	if err != nil {
+		return 0, fmt.Errorf("map line transfer buffer: %w", err)
+	}
+	writeMapped(ptr, data)
+	r.device.UnmapTransferBuffer(r.lineTransfer)
+
+	pass := cmdbuf.BeginCopyPass()
+	pass.UploadToGPUBuffer(
+		&sdl.GPUTransferBufferLocation{TransferBuffer: r.lineTransfer},
+		&sdl.GPUBufferRegion{Buffer: r.lineBuf, Size: size},
+		true,
+	)
+	pass.End()
+	return len(data) / lineVertexFloats, nil
+}
+
+// ensureLineCapacity guarantees the line buffer pair holds at least n floats,
+// growing geometrically so steady frames never reallocate.
+func (r *gpuRenderer) ensureLineCapacity(n int) error {
+	if r.lineCap >= n {
+		return nil
+	}
+	newCap := max(n, r.lineCap*2)
+	if r.lineBuf != nil {
+		r.device.ReleaseBuffer(r.lineBuf)
+		r.lineBuf = nil
+	}
+	if r.lineTransfer != nil {
+		r.device.ReleaseTransferBuffer(r.lineTransfer)
+		r.lineTransfer = nil
+	}
+	size := uint32(newCap * 4)
+	buf, err := r.device.CreateBuffer(&sdl.GPUBufferCreateInfo{Usage: sdl.GPU_BUFFERUSAGE_VERTEX, Size: size})
+	if err != nil {
+		return fmt.Errorf("create line buffer: %w", err)
+	}
+	transfer, err := r.device.CreateTransferBuffer(&sdl.GPUTransferBufferCreateInfo{
+		Usage: sdl.GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+		Size:  size,
+	})
+	if err != nil {
+		r.device.ReleaseBuffer(buf)
+		return fmt.Errorf("create line transfer buffer: %w", err)
+	}
+	r.lineBuf, r.lineTransfer, r.lineCap = buf, transfer, newCap
 	return nil
 }
 
@@ -496,6 +706,18 @@ func (r *gpuRenderer) destroy() {
 	if r.depth != nil {
 		r.device.ReleaseTexture(r.depth)
 		r.depth = nil
+	}
+	if r.lineBuf != nil {
+		r.device.ReleaseBuffer(r.lineBuf)
+		r.lineBuf = nil
+	}
+	if r.lineTransfer != nil {
+		r.device.ReleaseTransferBuffer(r.lineTransfer)
+		r.lineTransfer = nil
+	}
+	if r.linePipeline != nil {
+		r.device.ReleaseGraphicsPipeline(r.linePipeline)
+		r.linePipeline = nil
 	}
 	if r.pipeline != nil {
 		r.device.ReleaseGraphicsPipeline(r.pipeline)

@@ -77,6 +77,44 @@ var (
 // effectively infinite for any reasonable camera while avoiding ±Inf arithmetic.
 const axisInfinity = 1e7
 
+// axisFraction sets each object's local-axis length as a fraction of its own
+// bounding box's largest extent. Above 1 the axes poke clearly outside the mesh
+// (Blender style); with a small fraction the depth test would hide the part that
+// lies inside the geometry, leaving only a short visible stub. Purely cosmetic.
+const axisFraction = 1.25
+
+// ObjectAxes returns the object's local coordinate frame as three colored
+// segments (+X red, +Y green, +Z blue) with world-space endpoints: the local
+// axes, sized by axisFraction of the mesh bounds, transformed by the object's
+// model matrix. It is the single source of the per-object axis overlay, shared
+// by every rendering backend so they draw the same gizmo.
+func ObjectAxes(obj Object) [3]Segment {
+	m := obj.Transform.Matrix()
+	l := objectAxisLength(obj)
+	origin := m.MulVec4(math3d.V4(0, 0, 0, 1)).XYZ()
+	return [3]Segment{
+		{A: origin, B: m.MulVec4(math3d.V4(l, 0, 0, 1)).XYZ(), Color: AxisColorX},
+		{A: origin, B: m.MulVec4(math3d.V4(0, l, 0, 1)).XYZ(), Color: AxisColorY},
+		{A: origin, B: m.MulVec4(math3d.V4(0, 0, l, 1)).XYZ(), Color: AxisColorZ},
+	}
+}
+
+// objectAxisLength returns the length of the object's local axes, measured in
+// the object's own (model) space as axisFraction of its mesh bounding box's
+// largest extent. Because the tips are then transformed by the model matrix,
+// the per-object transform (including scale) carries through automatically, so
+// the axes auto-scale to each object — unlike Bounds, which ignores transforms.
+// A degenerate (zero-extent) mesh falls back to unit length.
+func objectAxisLength(obj Object) float64 {
+	lo, hi := obj.Mesh.Bounds()
+	ext := hi.Sub(lo)
+	size := max(ext.X, ext.Y, ext.Z)
+	if size == 0 {
+		size = 1
+	}
+	return axisFraction * size
+}
+
 // WorldAxes returns the three world coordinate axes as colored segments spanning
 // ±axisInfinity along X (red), Y (green) and Z (blue). Drop them into Scene.Lines
 // to draw the world frame; the renderer's frustum clip makes them effectively

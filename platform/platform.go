@@ -2,10 +2,12 @@
 
 // Package platform is the interactive, real-time runtime: it opens an OS window,
 // runs the frame loop, translates SDL events into the backend-agnostic
-// input.Frame, and hands each frame's scene to a rendering Backend (the CPU
-// rasterizer today; a GPU implementation can slot in without touching the loop).
-// It is gated behind the "sdl" build tag, so the default build and the offline
-// GIF path never depend on SDL.
+// input.Frame, and hands each frame's scene to a rendering Backend — the
+// software backend (the CPU rasterizer blitted through an SDL texture, and the
+// reference for correctness) or the SDL_GPU backend (Vulkan via offline-compiled
+// SPIR-V shaders, parity-tested against the software one). It is gated behind
+// the "sdl" build tag, so the default build and the offline GIF path never
+// depend on SDL.
 //
 // SDL3 is loaded from an embedded copy (github.com/Zyko0/go-sdl3/bin/binsdl), so
 // no system SDL3 install is required.

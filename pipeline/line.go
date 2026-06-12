@@ -7,12 +7,6 @@ import (
 	"github.com/kuronosu/kenderer/shading"
 )
 
-// axisFraction sets each object's local-axis length as a fraction of its own
-// bounding box's largest extent. Above 1 the axes poke clearly outside the mesh
-// (Blender style); with a small fraction the depth test would hide the part that
-// lies inside the geometry, leaving only a short visible stub. Purely cosmetic.
-const axisFraction = 1.25
-
 // drawLines is the line pass: it runs serially in Render after the parallel
 // triangle fill has finished (the wait barrier), so it reads a fully populated
 // z-buffer and is deterministic regardless of the fill worker count. It draws the
@@ -31,12 +25,9 @@ func (r *Renderer) drawLines(s scene.Scene, viewProj math3d.Mat4) {
 	}
 	if r.objectAxes {
 		for _, obj := range s.Objects {
-			m := obj.Transform.Matrix()
-			l := objectAxisLength(obj)
-			origin := m.MulVec4(math3d.V4(0, 0, 0, 1)).XYZ()
-			r.drawSegment(viewProj, origin, m.MulVec4(math3d.V4(l, 0, 0, 1)).XYZ(), scene.AxisColorX)
-			r.drawSegment(viewProj, origin, m.MulVec4(math3d.V4(0, l, 0, 1)).XYZ(), scene.AxisColorY)
-			r.drawSegment(viewProj, origin, m.MulVec4(math3d.V4(0, 0, l, 1)).XYZ(), scene.AxisColorZ)
+			for _, seg := range scene.ObjectAxes(obj) {
+				r.drawSegment(viewProj, seg.A, seg.B, seg.Color)
+			}
 		}
 	}
 }
@@ -99,20 +90,4 @@ func clipSegment(a, b math3d.Vec4) (math3d.Vec4, math3d.Vec4, bool) {
 		}
 	}
 	return a.Lerp(b, tEnter), a.Lerp(b, tLeave), true
-}
-
-// objectAxisLength returns the length of the object's local axes, measured in the
-// object's own (model) space as axisFraction of its mesh bounding box's largest
-// extent. Because the tips are then transformed by the model matrix, the per-object
-// transform (including scale) carries through automatically, so the axes auto-scale
-// to each object — unlike scene.Bounds, which ignores transforms. A degenerate
-// (zero-extent) mesh falls back to unit length.
-func objectAxisLength(obj scene.Object) float64 {
-	lo, hi := obj.Mesh.Bounds()
-	ext := hi.Sub(lo)
-	size := max(ext.X, ext.Y, ext.Z)
-	if size == 0 {
-		size = 1
-	}
-	return axisFraction * size
 }

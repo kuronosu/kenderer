@@ -73,6 +73,94 @@ func TestGPUSoftwareParity(t *testing.T) {
 	comparePixels(t, w, h, cpuImg.Pix, gpuPix)
 }
 
+// TestGPULines exercises the GPU line pass: with world axes in Scene.Lines and
+// the object-axes toggle on, the render must contain saturated red, green and
+// blue axis pixels (unlit linear 0/1 colors encode to exact 255s, which no
+// shaded surface reaches); with both toggles off the same scene must render
+// byte-identically to one that never had lines — the feature is inert, like
+// the CPU pipeline's.
+func TestGPULines(t *testing.T) {
+	const w, h = 256, 192
+
+	runtime.LockOSThread()
+	defer binsdl.Load().Unload()
+	if err := sdl.Init(sdl.INIT_VIDEO); err != nil {
+		t.Skipf("SDL init failed (headless?): %v", err)
+	}
+	defer sdl.Quit()
+	device, err := sdl.CreateGPUDevice(sdl.GPU_SHADERFORMAT_SPIRV, true, "")
+	if err != nil {
+		t.Skipf("no SPIR-V capable GPU device: %v", err)
+	}
+	defer device.Destroy()
+
+	render := func(lines bool) []byte {
+		t.Helper()
+		scn := parityScene(t)
+		r, err := newGPURenderer(device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB)
+		if err != nil {
+			t.Fatalf("create renderer: %v", err)
+		}
+		if lines {
+			scn.Lines = scene.WorldAxes()
+			r.objectAxes = true
+		}
+		pix, err := renderGPUWith(device, r, w, h, &scn)
+		if err != nil {
+			t.Fatalf("GPU render: %v", err)
+		}
+		return pix
+	}
+
+	countSaturated := func(pix []byte) (red, green, blue int) {
+		for i := 0; i < len(pix); i += 4 {
+			r, g, b := pix[i], pix[i+1], pix[i+2]
+			switch {
+			case r >= 250 && g < 10 && b < 10:
+				red++
+			case g >= 250 && r < 10 && b < 10:
+				green++
+			case b >= 250 && r < 10 && g < 10:
+				blue++
+			}
+		}
+		return
+	}
+
+	withLines := render(true)
+	red, green, blue := countSaturated(withLines)
+	t.Logf("axis pixels: %d red, %d green, %d blue", red, green, blue)
+	// The world axes alone cross most of the frame; tens of pixels per color is
+	// a conservative floor that still catches a missing/mistransformed pass.
+	if red < 20 || green < 20 || blue < 20 {
+		dir := dumpParityImages(t, w, h, withLines, withLines)
+		t.Errorf("GPU line pass missing axis pixels (r=%d g=%d b=%d); image dumped to %s", red, green, blue, dir)
+	}
+
+	withoutLines := render(false)
+	if r0, g0, b0 := countSaturated(withoutLines); r0+g0+b0 != 0 {
+		t.Errorf("toggles off must draw no axis pixels, found r=%d g=%d b=%d", r0, g0, b0)
+	}
+	if !bytes.Equal(withoutLines, renderBaseline(t, device, w, h)) {
+		t.Error("toggles off must render byte-identically to a scene without lines")
+	}
+}
+
+// renderBaseline renders the plain parity scene (no lines) on a fresh renderer.
+func renderBaseline(t *testing.T, device *sdl.GPUDevice, w, h int) []byte {
+	t.Helper()
+	scn := parityScene(t)
+	r, err := newGPURenderer(device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB)
+	if err != nil {
+		t.Fatalf("create renderer: %v", err)
+	}
+	pix, err := renderGPUWith(device, r, w, h, &scn)
+	if err != nil {
+		t.Fatalf("GPU render: %v", err)
+	}
+	return pix
+}
+
 // parityScene mirrors the golden-test scene: a flat white cube, a smooth tinted
 // cube and a bilinear-textured quad under one directional light.
 func parityScene(t *testing.T) scene.Scene {
@@ -165,13 +253,19 @@ func parityTexture(t *testing.T) *texture.Texture {
 	return tex
 }
 
-// renderGPUOffscreen draws the scene with gpuRenderer into an offscreen sRGB
-// color target and downloads the resulting RGBA bytes.
+// renderGPUOffscreen draws the scene with a fresh gpuRenderer into an
+// offscreen sRGB color target and downloads the resulting RGBA bytes.
 func renderGPUOffscreen(device *sdl.GPUDevice, w, h int, s *scene.Scene) ([]byte, error) {
 	r, err := newGPURenderer(device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB)
 	if err != nil {
 		return nil, err
 	}
+	return renderGPUWith(device, r, w, h, s)
+}
+
+// renderGPUWith renders one frame with the given renderer offscreen, downloads
+// the RGBA bytes and destroys the renderer.
+func renderGPUWith(device *sdl.GPUDevice, r *gpuRenderer, w, h int, s *scene.Scene) ([]byte, error) {
 	defer func() {
 		_ = device.WaitForIdle()
 		r.destroy()

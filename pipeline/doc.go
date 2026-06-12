@@ -28,7 +28,8 @@
 //
 // After the fill, a serial line pass draws any colored world-space segments
 // (Scene.Lines, e.g. scene.WorldAxes) and, when SetObjectAxes is on, each object's
-// local coordinate frame. It runs after the fill barrier so it reads the complete
+// local coordinate frame (scene.ObjectAxes). It runs after the fill barrier so it
+// reads the complete
 // z-buffer (lines are correctly occluded) and is deterministic regardless of worker
 // count. Segments are clipped against the same six frustum planes as triangles —
 // parametrically (Liang-Barsky) before the perspective divide, so a segment
