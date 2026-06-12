@@ -85,7 +85,7 @@ func main() {
 	axes := flag.Bool("axes", false, "draw world + object axes at startup (X red, Y green, Z blue; toggle with F2/F3)")
 	fullscreen := flag.Bool("fullscreen", false, "open fullscreen; bypasses the compositor so FPS reflects raw throughput")
 	workers := flag.Int("workers", 0, "fill worker goroutines (0 = auto = GOMAXPROCS, 1 = serial; software backend only)")
-	backendName := flag.String("backend", "software", "rendering backend: software (CPU rasterizer)")
+	backendName := flag.String("backend", "software", "rendering backend: software (CPU rasterizer) or gpu (SDL_GPU/Vulkan)")
 	flag.Parse()
 
 	fovy := *fovDeg * math.Pi / 180
@@ -106,8 +106,10 @@ func main() {
 			Background: color.RGBA{R: 18, G: 18, B: 24, A: 255},
 			Workers:    *workers,
 		})
+	case "gpu":
+		backend = platform.NewGPUBackend()
 	default:
-		fmt.Fprintf(os.Stderr, "viewer: unknown backend %q (valid: software)\n", *backendName)
+		fmt.Fprintf(os.Stderr, "viewer: unknown backend %q (valid: software, gpu)\n", *backendName)
 		os.Exit(1)
 	}
 
