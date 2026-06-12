@@ -26,6 +26,16 @@
 // top-left fill rule resolve ties exactly as in serial: the image is bit-identical
 // for any worker count (Options.Workers; 0 = GOMAXPROCS, 1 = the serial path).
 //
+// After the fill, a serial line pass draws any colored world-space segments
+// (Scene.Lines, e.g. scene.WorldAxes) and, when SetObjectAxes is on, each object's
+// local coordinate frame. It runs after the fill barrier so it reads the complete
+// z-buffer (lines are correctly occluded) and is deterministic regardless of worker
+// count. Segments are clipped against the same six frustum planes as triangles —
+// parametrically (Liang-Barsky) before the perspective divide, so a segment
+// crossing the near plane is never divided by a non-positive w. Lines depth-test
+// but write no depth, and the pass is a no-op when there is nothing to draw, so the
+// feature is inert and the output unchanged unless a caller opts in.
+//
 // A Renderer reuses one framebuffer across frames; see Render for the returned
 // buffer's lifetime.
 package pipeline

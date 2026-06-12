@@ -59,7 +59,15 @@ GPU), evolving into a small interactive 3D engine / tool. Module
   glTF `baseColorFactor` and `COLOR_0` vertex colors are already linear. Loaders set
   `Vertex.Color` to white so the shaded base `albedo ⊙ vertexColor` is never zeroed.
 - Clipping: Sutherland–Hodgman in clip space vs the 6 frustum planes, inside
-  `pipeline` as pure functions.
+  `pipeline` as pure functions. Lines reuse the **same** planes parametrically
+  (Liang–Barsky, `clipSegment`) before the divide, so a near-crossing segment never
+  divides by w≈0.
+- Lines: `raster.DrawLine` is an unlit, constant-color, depth-**tested but not
+  depth-written** screen-space DDA (the line analog of the triangle fill). A serial
+  `pipeline` line pass after the fill barrier draws `scene.Scene.Lines` (caller
+  world segments, e.g. `scene.WorldAxes`) and per-object local axes (gated by
+  `Renderer.SetObjectAxes`). Axis colors live once in `scene.AxisColor{X,Y,Z}`
+  (linear: +X red, +Y green, +Z blue). Inert when off ⇒ output byte-identical.
 - SDL texture: `PIXELFORMAT_ABGR8888` (little-endian byte order = R,G,B,A of
   `image.RGBA.Pix`; do **not** use RGBA8888); update with `img.Stride`; size to the
   drawable pixels via `Renderer.CurrentOutputSize` (HiDPI). [platform]

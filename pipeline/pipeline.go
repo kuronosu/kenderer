@@ -47,7 +47,16 @@ type Renderer struct {
 	prepared []raster.Prepared
 	// bandCursor hands scanline bands to fill workers (atomic = dynamic schedule).
 	bandCursor atomic.Int64
+	// objectAxes draws each object's local coordinate frame in the line pass; see
+	// SetObjectAxes. World axes (and any other lines) ride along in Scene.Lines.
+	objectAxes bool
 }
+
+// SetObjectAxes enables or disables drawing each object's local coordinate frame
+// (X red, Y green, Z blue) in the line pass. It is off by default; a viewer can
+// toggle it at runtime between frames. World axes are not controlled here — they
+// are caller-provided segments in Scene.Lines (see scene.WorldAxes).
+func (r *Renderer) SetObjectAxes(on bool) { r.objectAxes = on }
 
 // NewRenderer creates a Renderer with the given options. Width and Height must be
 // positive.
@@ -107,6 +116,11 @@ func (r *Renderer) Render(s scene.Scene) *framebuffer.Buffer {
 
 	// Phase 2 (parallel): fill the prepared triangles across disjoint scanline bands.
 	r.fill()
+
+	// Line pass (serial): drawn after the fill barrier, reading the now-complete
+	// z-buffer so lines are correctly occluded. It is a no-op (and the framebuffer
+	// is untouched) when there are no lines to draw, keeping the output identical.
+	r.drawLines(s, viewProj)
 	return r.fb
 }
 
@@ -162,9 +176,7 @@ func processVertex(v geometry.Vertex, model, mvp math3d.Mat4, normalMat math3d.M
 func (r *Renderer) prepare(tri [3]clipVertex, shader shading.Shader) {
 	var rv [3]raster.Vertex
 	for i, cv := range tri {
-		invW := 1 / cv.Pos.W
-		ndc := cv.Pos.XYZ().Scale(invW)
-		screen := r.viewport.MulVec4(ndc.Vec4(1)).XYZ()
+		screen, invW := r.toScreen(cv.Pos)
 		rv[i] = raster.Vertex{Pos: screen, InvW: invW, Frag: cv.Frag}
 	}
 	area := raster.SignedArea(rv[0].Pos.XY(), rv[1].Pos.XY(), rv[2].Pos.XY())

@@ -2,8 +2,8 @@
 
 // Command viewer renders the kenderer cube in a live, resizable window with an
 // orbit camera: drag to orbit, scroll to zoom, middle-drag (or shift+drag) to
-// pan, F1 to toggle the FPS/frame-time overlay, Escape or the close button to
-// quit.
+// pan, F1 to toggle the FPS/frame-time overlay, F2 to toggle the world axes, F3 to
+// toggle each object's local axes, Escape or the close button to quit.
 //
 // It is built only with the "sdl" tag:
 //
@@ -41,11 +41,34 @@ type viewer struct {
 	renderer *pipeline.Renderer
 	scn      scene.Scene
 	cam      camera.OrbitCamera
+
+	// Axis overlays. worldAxes/objectAxes are the live toggle states (F2/F3);
+	// prevF2/prevF3 hold the previous key state for press-edge detection. worldSegs
+	// is scene.WorldAxes precomputed once and swapped into scn.Lines when enabled.
+	worldAxes, objectAxes bool
+	prevF2, prevF3        bool
+	worldSegs             []scene.Segment
 }
 
 func (v *viewer) Update(_ time.Duration, in input.Frame) {
 	v.cam.Update(in)
 	v.cam.Apply(&v.scn.Camera)
+
+	// Toggle the axis overlays on the F2/F3 press edge (not while held).
+	if in.F2 && !v.prevF2 {
+		v.worldAxes = !v.worldAxes
+	}
+	if in.F3 && !v.prevF3 {
+		v.objectAxes = !v.objectAxes
+	}
+	v.prevF2, v.prevF3 = in.F2, in.F3
+
+	if v.worldAxes {
+		v.scn.Lines = v.worldSegs
+	} else {
+		v.scn.Lines = nil
+	}
+	v.renderer.SetObjectAxes(v.objectAxes)
 }
 
 func (v *viewer) Render() *image.RGBA { return v.renderer.Render(v.scn).Image() }
@@ -60,6 +83,7 @@ func main() {
 	modelPath := flag.String("model", "", "model to load (.obj, .gltf, .glb); empty = built-in cube")
 	texPath := flag.String("texture", "", "albedo texture for an OBJ without a material (optional)")
 	stats := flag.Bool("stats", true, "show FPS/frame-time overlay (toggle with F1)")
+	axes := flag.Bool("axes", false, "draw world + object axes at startup (X red, Y green, Z blue; toggle with F2/F3)")
 	fullscreen := flag.Bool("fullscreen", false, "open fullscreen; bypasses the compositor so FPS reflects raw throughput")
 	workers := flag.Int("workers", 0, "fill worker goroutines (0 = auto = GOMAXPROCS, 1 = serial)")
 	flag.Parse()
@@ -86,7 +110,10 @@ func main() {
 			Light:   shading.DirectionalLight{Direction: math3d.V3(-0.5, -1, -0.7).Normalize(), Color: math3d.V3(1, 1, 1), Intensity: 1},
 			Ambient: 0.15,
 		},
-		cam: orbit,
+		cam:        orbit,
+		worldAxes:  *axes,
+		objectAxes: *axes,
+		worldSegs:  scene.WorldAxes(),
 	}
 	v.cam.Apply(&v.scn.Camera) // initial pose before the first frame
 

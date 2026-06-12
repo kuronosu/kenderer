@@ -14,6 +14,7 @@ type Frame struct {
 	Wheel               float64 // vertical wheel movement during this frame
 	Left, Right, Middle bool    // mouse button states
 	Shift               bool    // shift modifier held (e.g. shift+drag to pan)
+	F2, F3              bool    // function-key states for app-controlled toggles
 	Width, Height       int     // current drawable size, in pixels
 	Quit                bool    // user requested to close the window
 }

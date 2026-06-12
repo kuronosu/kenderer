@@ -163,6 +163,9 @@ func Run(cfg Config, app App) error {
 		if keys[int(sdl.SCANCODE_ESCAPE)] {
 			in.Quit = true
 		}
+		// App-controlled toggle keys exposed as level state; the app edge-detects.
+		in.F2 = keys[int(sdl.SCANCODE_F2)]
+		in.F3 = keys[int(sdl.SCANCODE_F3)]
 
 		// F1 toggles the stats overlay on the press edge (not while held).
 		f1 := keys[int(sdl.SCANCODE_F1)]

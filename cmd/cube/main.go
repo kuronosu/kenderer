@@ -31,15 +31,16 @@ func main() {
 	out := flag.String("out", "cube.gif", "output GIF path")
 	fovDeg := flag.Float64("fov", 50, "vertical field of view in degrees")
 	workers := flag.Int("workers", 0, "fill worker goroutines (0 = auto = GOMAXPROCS, 1 = serial)")
+	axes := flag.Bool("axes", false, "draw world + object axes (X red, Y green, Z blue)")
 	flag.Parse()
 
-	if err := run(*width, *height, *fps, *duration, *out, *fovDeg, *workers); err != nil {
+	if err := run(*width, *height, *fps, *duration, *out, *fovDeg, *workers, *axes); err != nil {
 		fmt.Fprintln(os.Stderr, "cube:", err)
 		os.Exit(1)
 	}
 }
 
-func run(width, height, fps int, duration time.Duration, out string, fovDeg float64, workers int) error {
+func run(width, height, fps int, duration time.Duration, out string, fovDeg float64, workers int, axes bool) error {
 	if width <= 0 || height <= 0 {
 		return fmt.Errorf("width and height must be positive (got %dx%d)", width, height)
 	}
@@ -68,6 +69,15 @@ func run(width, height, fps int, duration time.Duration, out string, fovDeg floa
 		Workers:    workers,
 	})
 
+	// With -axes, draw the object's local frame and the world axes. The world axes
+	// are caller-provided segments (computed once); the object axes are emitted by
+	// the renderer from each object's model matrix.
+	var worldSegs []scene.Segment
+	if axes {
+		renderer.SetObjectAxes(true)
+		worldSegs = scene.WorldAxes()
+	}
+
 	// frame is deterministic in t: the cube makes exactly one turn about Y over
 	// the whole duration (a seamless loop), composed with a fixed slight tilt
 	// about X. The elevated camera reveals the top face.
@@ -88,6 +98,7 @@ func run(width, height, fps int, duration time.Duration, out string, fovDeg floa
 			}},
 			Light:   light,
 			Ambient: 0.15,
+			Lines:   worldSegs,
 		}
 		return renderer.Render(scn).Image()
 	}

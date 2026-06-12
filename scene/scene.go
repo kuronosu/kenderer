@@ -52,12 +52,52 @@ type Object struct {
 	Smooth    bool
 }
 
+// Segment is a colored line segment in world space, drawn by the renderer's line
+// pass with no lighting and a depth test against the geometry (it is occluded but
+// writes no depth). Color is linear RGB, like every other color the pipeline
+// shades, and is sRGB-encoded once at output. Segments are the generic line
+// primitive: world axes, grids, wireframes and normals are all just lists of them.
+type Segment struct {
+	A, B  math3d.Vec3 // world-space endpoints
+	Color math3d.Vec3 // linear RGB
+}
+
+// AxisColorX, AxisColorY and AxisColorZ are the conventional axis colors in linear
+// RGB: +X red, +Y green, +Z blue. Being pure 0/1 components, they encode to
+// saturated sRGB (e.g. 255,0,0) at output. The world-axis helper and the renderer's
+// per-object axes share these so the convention has a single source of truth.
+var (
+	AxisColorX = math3d.V3(1, 0, 0)
+	AxisColorY = math3d.V3(0, 1, 0)
+	AxisColorZ = math3d.V3(0, 0, 1)
+)
+
+// axisInfinity is the half-length of the "infinite" world-axis segments. The
+// frustum clip trims them to the visible portion, so a value this large reads as
+// effectively infinite for any reasonable camera while avoiding ±Inf arithmetic.
+const axisInfinity = 1e7
+
+// WorldAxes returns the three world coordinate axes as colored segments spanning
+// ±axisInfinity along X (red), Y (green) and Z (blue). Drop them into Scene.Lines
+// to draw the world frame; the renderer's frustum clip makes them effectively
+// infinite lines through the origin.
+func WorldAxes() []Segment {
+	return []Segment{
+		{A: math3d.V3(-axisInfinity, 0, 0), B: math3d.V3(axisInfinity, 0, 0), Color: AxisColorX},
+		{A: math3d.V3(0, -axisInfinity, 0), B: math3d.V3(0, axisInfinity, 0), Color: AxisColorY},
+		{A: math3d.V3(0, 0, -axisInfinity), B: math3d.V3(0, 0, axisInfinity), Color: AxisColorZ},
+	}
+}
+
 // Scene bundles everything the renderer needs to draw one frame.
 type Scene struct {
 	Camera  Camera
 	Objects []Object
 	Light   shading.DirectionalLight
 	Ambient float64
+	// Lines are world-space colored segments drawn (depth-tested, unlit) after the
+	// triangles, e.g. the world axes from WorldAxes. A nil/empty slice draws nothing.
+	Lines []Segment
 }
 
 // Bounds returns the combined axis-aligned bounding box of the objects' meshes,

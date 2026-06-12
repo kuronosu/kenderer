@@ -10,7 +10,8 @@ import (
 func TestRunWritesGIF(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "cube.gif")
 
-	if err := run(32, 32, 8, 250*time.Millisecond, out, 50, 0); err != nil {
+	// axes=true exercises the world + object line pass through the GIF path too.
+	if err := run(32, 32, 8, 250*time.Millisecond, out, 50, 0, true); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -25,7 +26,7 @@ func TestRunWritesGIF(t *testing.T) {
 
 func TestRunRejectsBadSize(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "cube.gif")
-	if err := run(0, 32, 8, time.Second, out, 50, 0); err == nil {
+	if err := run(0, 32, 8, time.Second, out, 50, 0, false); err == nil {
 		t.Error("expected error for non-positive width")
 	}
 }
