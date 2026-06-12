@@ -3,7 +3,8 @@
 // Command viewer renders the kenderer cube in a live, resizable window with an
 // orbit camera: drag to orbit, scroll to zoom, middle-drag (or shift+drag) to
 // pan, F1 to toggle the FPS/frame-time overlay, F2 to toggle the world axes, F3 to
-// toggle each object's local axes, Escape or the close button to quit.
+// toggle each object's local axes, Escape or the close button to quit. The
+// -backend flag selects the rendering backend (software = CPU rasterizer).
 //
 // It is built only with the "sdl" tag:
 //
@@ -15,7 +16,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"image"
 	"image/color"
 	"math"
 	"os"
@@ -36,11 +36,12 @@ import (
 	"github.com/kuronosu/kenderer/texture"
 )
 
-// viewer adapts the renderer, scene and orbit camera to the platform.App loop.
+// viewer adapts the scene, the orbit camera and the backend toggles to the
+// platform.App loop; rendering itself lives in the platform.Backend.
 type viewer struct {
-	renderer *pipeline.Renderer
-	scn      scene.Scene
-	cam      camera.OrbitCamera
+	backend platform.Backend
+	scn     scene.Scene
+	cam     camera.OrbitCamera
 
 	// Axis overlays. worldAxes/objectAxes are the live toggle states (F2/F3);
 	// prevF2/prevF3 hold the previous key state for press-edge detection. worldSegs
@@ -68,12 +69,10 @@ func (v *viewer) Update(_ time.Duration, in input.Frame) {
 	} else {
 		v.scn.Lines = nil
 	}
-	v.renderer.SetObjectAxes(v.objectAxes)
+	v.backend.SetObjectAxes(v.objectAxes)
 }
 
-func (v *viewer) Render() *image.RGBA { return v.renderer.Render(v.scn).Image() }
-
-func (v *viewer) Resize(w, h int) { v.renderer.Resize(w, h) }
+func (v *viewer) Scene() *scene.Scene { return &v.scn }
 
 func main() {
 	width := flag.Int("w", 800, "initial window width")
@@ -85,7 +84,8 @@ func main() {
 	stats := flag.Bool("stats", true, "show FPS/frame-time overlay (toggle with F1)")
 	axes := flag.Bool("axes", false, "draw world + object axes at startup (X red, Y green, Z blue; toggle with F2/F3)")
 	fullscreen := flag.Bool("fullscreen", false, "open fullscreen; bypasses the compositor so FPS reflects raw throughput")
-	workers := flag.Int("workers", 0, "fill worker goroutines (0 = auto = GOMAXPROCS, 1 = serial)")
+	workers := flag.Int("workers", 0, "fill worker goroutines (0 = auto = GOMAXPROCS, 1 = serial; software backend only)")
+	backendName := flag.String("backend", "software", "rendering backend: software (CPU rasterizer)")
 	flag.Parse()
 
 	fovy := *fovDeg * math.Pi / 180
@@ -96,14 +96,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	v := &viewer{
-		renderer: pipeline.NewRenderer(pipeline.Options{
+	var backend platform.Backend
+	switch *backendName {
+	case "software":
+		backend = platform.NewSoftwareBackend(pipeline.Options{
 			Width:      *width,
 			Height:     *height,
 			Cull:       pipeline.CullBack,
 			Background: color.RGBA{R: 18, G: 18, B: 24, A: 255},
 			Workers:    *workers,
-		}),
+		})
+	default:
+		fmt.Fprintf(os.Stderr, "viewer: unknown backend %q (valid: software)\n", *backendName)
+		os.Exit(1)
+	}
+
+	v := &viewer{
+		backend: backend,
 		scn: scene.Scene{
 			Camera:  scene.Camera{Up: math3d.V3(0, 1, 0), FOVY: fovy, Near: near, Far: far},
 			Objects: objects,
@@ -118,7 +127,7 @@ func main() {
 	v.cam.Apply(&v.scn.Camera) // initial pose before the first frame
 
 	cfg := platform.Config{Title: "kenderer viewer", Width: *width, Height: *height, FPS: *fps, ShowStats: *stats, Fullscreen: *fullscreen}
-	if err := platform.Run(cfg, v); err != nil {
+	if err := platform.Run(cfg, v, backend); err != nil {
 		fmt.Fprintln(os.Stderr, "viewer:", err)
 		os.Exit(1)
 	}

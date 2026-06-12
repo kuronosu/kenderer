@@ -28,8 +28,9 @@ GPU), evolving into a small interactive 3D engine / tool. Module
   `asset/gltf`→asset,geometry,texture,math3d,**qmuntal/gltf** · `present` (stdlib)
   and `cmd/cube` consume pipeline/framebuffer/present.
 - Interactive: `input` (stdlib) → `camera` (→math3d,scene,input). SDL-gated:
-  `platform` → sdl,input ; `cmd/viewer` → platform,pipeline,scene,camera,asset,
-  asset/gltf,texture.
+  `platform` → sdl,input,scene,pipeline (loop + `Backend` seam; the software
+  backend wraps `pipeline.Renderer` and owns presentation) ; `cmd/viewer` →
+  platform,pipeline,scene,camera,asset,asset/gltf,texture.
 - **Flex points:** input is decoupled — `input.Frame` is our own type; camera and
   the loop depend on it, never on SDL. Rendering is isolated in `pipeline` so a
   GPU backend can later sit behind a `Renderer` interface (F4); today
