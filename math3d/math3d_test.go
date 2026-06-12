@@ -121,6 +121,51 @@ func TestPerspective(t *testing.T) {
 	}
 }
 
+func TestPerspectiveZO(t *testing.T) {
+	near, far := 1.0, 100.0
+	p := PerspectiveZO(math.Pi/2, 1, near, far)
+	gl := Perspective(math.Pi/2, 1, near, far)
+
+	// Only the depth rows differ from Perspective: x/y mapping and w_clip match.
+	for r := 0; r < 2; r++ {
+		for c := 0; c < 4; c++ {
+			if p[r][c] != gl[r][c] {
+				t.Errorf("row %d differs from Perspective: %v vs %v", r, p[r], gl[r])
+			}
+		}
+	}
+
+	tests := []struct {
+		z      float64
+		wantZN float64 // expected NDC z (zero-to-one)
+	}{
+		{-near, 0},
+		{-far, 1},
+	}
+	for _, tc := range tests {
+		c := p.MulVec4(Vec4{0, 0, tc.z, 1})
+		if zn := c.Z / c.W; !approx(zn, tc.wantZN) {
+			t.Errorf("z_view=%v -> NDC z=%v, want %v", tc.z, zn, tc.wantZN)
+		}
+	}
+
+	// The ZO depth must equal the GL NDC depth remapped to a window z in [0, 1]
+	// (0.5z+0.5, the viewport convention) — that identity is what makes the GPU
+	// and CPU backends agree on every interpolated depth value, not just at the
+	// near and far planes.
+	for _, z := range []float64{-1.5, -7, -42.5, -99} {
+		zo := p.MulVec4(Vec4{0, 0, z, 1})
+		gn := gl.MulVec4(Vec4{0, 0, z, 1})
+		if got, want := zo.Z/zo.W, 0.5*(gn.Z/gn.W)+0.5; !approx(got, want) {
+			t.Errorf("z_view=%v: ZO depth %v != window-remapped GL depth %v", z, got, want)
+		}
+	}
+
+	if c := p.MulVec4(Vec4{0, 0, -42, 1}); !approx(c.W, 42) {
+		t.Errorf("w_clip = %v, want 42", c.W)
+	}
+}
+
 func TestLookAt(t *testing.T) {
 	eye := Vec3{0, 0, 5}
 	view := LookAt(eye, Vec3{0, 0, 0}, Vec3{0, 1, 0})

@@ -44,6 +44,22 @@ func TestSampleNearestExactTexel(t *testing.T) {
 	}
 }
 
+func TestTexelMatchesNearestSample(t *testing.T) {
+	// Texel must expose exactly the stored texels — the same values a nearest
+	// sample at the texel center returns — so a consumer re-uploading the image
+	// (the GPU backend) reproduces it losslessly.
+	tx := tex2x2()
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			got := tx.Texel(x, y)
+			want := tx.Sample((float64(x)+0.5)/2, (float64(y)+0.5)/2, Nearest, Repeat)
+			if got != want {
+				t.Errorf("Texel(%d,%d) = %v, want %v", x, y, got, want)
+			}
+		}
+	}
+}
+
 func TestSampleBilinearMidpointAverages(t *testing.T) {
 	tx := tex2x2()
 	// The exact center is equidistant from all four texels, so bilinear returns

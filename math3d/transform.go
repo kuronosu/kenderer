@@ -62,6 +62,23 @@ func Perspective(fovy, aspect, near, far float64) Mat4 {
 	return m
 }
 
+// PerspectiveZO is Perspective with the zero-to-one depth convention of
+// SDL_GPU/Vulkan/D3D render targets: identical x/y mapping, but view-space z in
+// [-near, -far] maps to NDC z in [0, 1] instead of [-1, 1], with w_clip =
+// -z_view. The CPU pipeline keeps using Perspective; analytically, this ZO
+// depth equals the window z the CPU path produces (NDC [-1, 1] remapped by the
+// viewport to [0, 1]), so the two backends agree on depth exactly.
+func PerspectiveZO(fovy, aspect, near, far float64) Mat4 {
+	f := 1 / math.Tan(fovy/2)
+	var m Mat4
+	m[0][0] = f / aspect
+	m[1][1] = f
+	m[2][2] = far / (near - far)
+	m[2][3] = (far * near) / (near - far)
+	m[3][2] = -1
+	return m
+}
+
 // LookAt returns a right-handed view matrix for a camera positioned at eye,
 // looking at target, with the given approximate up vector. The camera looks
 // down its local -Z axis.

@@ -64,6 +64,12 @@ func (t *Texture) at(x, y int, wrap Wrap) math3d.Vec3 {
 	return t.texel(wrapIndex(x, t.Width, wrap), wrapIndex(y, t.Height, wrap))
 }
 
+// Texel returns the stored linear-RGB texel at integer coordinates (x, y),
+// which must be in [0, Width) x [0, Height). It exposes the raw image to
+// consumers that re-upload it elsewhere (the GPU backend re-encodes texels to
+// sRGB bytes); filtered, wrapped lookups remain Sample's job.
+func (t *Texture) Texel(x, y int) math3d.Vec3 { return t.texel(x, y) }
+
 // Sample returns the linear-RGB color at (u, v) using the given filter and wrap.
 // The origin is top-left: v = 0 is row 0. An empty texture returns black.
 func (t *Texture) Sample(u, v float64, filter Filter, wrap Wrap) math3d.Vec3 {
